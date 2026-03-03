@@ -319,6 +319,34 @@ const definition: AgentDefinition = {
     const SUMMARY_HEADER =
       'This is a summary of the conversation so far. The original messages have been condensed to save context space.'
 
+    /** Tag used for the auto-injected memory frame message */
+    const MEMORY_FRAME_TAG = 'MEMORY_FRAME'
+
+    /**
+     * Meta-planning lines that can trigger context-gathering loops after compaction.
+     * These lines are low-value state narration, not durable conversation facts.
+     */
+    const LOOP_META_LINE_PATTERNS = [
+      /\bthis conversation has been stuck in a context-gathering loop\b/i,
+      /\blet me break out of (this )?loop\b/i,
+      /\bi have (all )?(the )?main files loaded\b/i,
+      /\blet me read (the remaining|all) files\b/i,
+      /\blet me now read the remaining files\b/i,
+      /\blet me break out of it by reading\b/i,
+    ]
+
+    const stripLoopMetaLines = (value: string): string => {
+      const cleanedLines = value
+        .split('\n')
+        .map((line) => line.trim())
+        .filter((line) => {
+          if (!line) return false
+          return !LOOP_META_LINE_PATTERNS.some((pattern) => pattern.test(line))
+        })
+
+      return cleanedLines.join('\n').trim()
+    }
+
     /** Fudge factor for token count threshold to trigger pruning earlier */
     const TOKEN_COUNT_FUDGE_FACTOR = 1000
 
@@ -650,6 +678,16 @@ const definition: AgentDefinition = {
       currentMessages.splice(lastRemainingInstructionsIndex, 1)
     }
 
+    // Preserve the latest auto memory frame message so it survives summarization.
+    let memoryFrameMessage: Message | null = null
+    const lastMemoryFrameIndex = currentMessages.findLastIndex((message) =>
+      message.tags?.includes(MEMORY_FRAME_TAG),
+    )
+    if (lastMemoryFrameIndex !== -1) {
+      memoryFrameMessage = currentMessages[lastMemoryFrameIndex]
+      currentMessages.splice(lastMemoryFrameIndex, 1)
+    }
+
     // === SUMMARIZATION STRATEGY ===
     // Convert entire conversation to a single summarized user message
     // If there's already a summary from a previous compaction, extract and preserve it
@@ -692,6 +730,7 @@ const definition: AgentDefinition = {
       if (message.tags?.includes('INSTRUCTIONS_PROMPT')) return false
       if (message.tags?.includes('STEP_PROMPT')) return false
       if (message.tags?.includes('SUBAGENT_SPAWN')) return false
+      if (message.tags?.includes(MEMORY_FRAME_TAG)) return false
 
       // Exclude previous conversation summaries
       if (message.role === 'user' && Array.isArray(message.content)) {
@@ -759,8 +798,9 @@ const definition: AgentDefinition = {
               const textWithoutThinkTags = (part.text as string)
                 .replace(/<think>[\s\S]*?<\/think>/g, '')
                 .trim()
-              if (textWithoutThinkTags) {
-                textParts.push(textWithoutThinkTags)
+              const textWithoutLoopMeta = stripLoopMetaLines(textWithoutThinkTags)
+              if (textWithoutLoopMeta) {
+                textParts.push(textWithoutLoopMeta)
               }
             } else if (part.type === 'tool-call') {
               const toolName = part.toolName as string
@@ -974,7 +1014,7 @@ This is a summary of the conversation so far. The original messages have been co
 ${summaryText}
 </conversation_summary>
 
-Please continue the conversation from here. In particular, try to address the user's latest request detailed in the summary above. You may need to re-gather context (e.g. read some files) to get up to speed and then tackle the user's request.`,
+Please continue the conversation from here. In particular, address the user's latest request detailed in the summary above. Use this summary and any MEMORY_FRAME context first; avoid restarting broad context gathering or repeating prior planning loops. Only read additional files when necessary to execute the next concrete step.`,
     }
     // Build content array with text and any preserved images
     const summaryContentParts: (TextPart | ImagePart | FilePart)[] = [textPart]
@@ -990,6 +1030,9 @@ Please continue the conversation from here. In particular, try to address the us
 
     // Build final messages array: summary first, then INSTRUCTIONS_PROMPT if it exists
     const finalMessages: Message[] = [summarizedMessage]
+    if (memoryFrameMessage) {
+      finalMessages.push({ ...memoryFrameMessage, sentAt: now })
+    }
     if (instructionsPromptMessage) {
       // Update sentAt to current time so future cache miss checks use fresh timestamps
       finalMessages.push({ ...instructionsPromptMessage, sentAt: now })

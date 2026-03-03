@@ -316,6 +316,26 @@ describe('context-pruner handleSteps', () => {
     expect(content).toContain('Edited file: file1.ts')
   })
 
+  test('removes loop-prone assistant meta lines from summary output', () => {
+    const messages = [
+      createMessage('user', 'Implement the hook cleanly'),
+      createMessage(
+        'assistant',
+        `I have the main files loaded.\nLet me read the remaining files for state atomics.\nThis conversation has been stuck in a context-gathering loop.\nI will now implement the solution in host.rs and guest.rs.`,
+      ),
+    ]
+
+    const results = runHandleSteps(messages, 50000, 10000)
+    const content = results[0].input.messages[0].content[0].text
+
+    expect(content).not.toContain('I have the main files loaded')
+    expect(content).not.toContain('Let me read the remaining files')
+    expect(content).not.toContain('stuck in a context-gathering loop')
+    expect(content).toContain(
+      'I will now implement the solution in host.rs and guest.rs',
+    )
+  })
+
   test('summarizes various tool types correctly', () => {
     const messages = [
       createMessage('user', 'Do various tasks'),
@@ -514,6 +534,40 @@ describe('context-pruner handleSteps', () => {
     const instructionsContent = (secondMessage.content[0] as { text: string })
       .text
     expect(instructionsContent).toBe('Parent agent instructions')
+  })
+
+  test('preserves MEMORY_FRAME as second message when summarizing', () => {
+    const messages: Message[] = [
+      createMessage('user', 'Remember this context'),
+      {
+        role: 'user',
+        content: [
+          {
+            type: 'text',
+            text: '<system><memory_frame version="1" thread_id="t1" revision="4">[OPEN TASKS]\n- Fix tests</memory_frame></system>',
+          },
+        ],
+        tags: ['MEMORY_FRAME'],
+      },
+      createMessage('assistant', 'Understood, moving ahead'),
+    ]
+
+    const results = runHandleSteps(messages, 250000, 200000)
+    const resultMessages = results[0].input.messages
+
+    expect(resultMessages).toHaveLength(2)
+
+    const summaryContent = (resultMessages[0].content[0] as { text: string })
+      .text
+    expect(summaryContent).toContain('<conversation_summary>')
+    expect(summaryContent).toContain('Remember this context')
+    expect(summaryContent).not.toContain('<memory_frame')
+
+    const memoryMessage = resultMessages[1]
+    expect(memoryMessage.tags).toContain('MEMORY_FRAME')
+    const memoryContent = (memoryMessage.content[0] as { text: string }).text
+    expect(memoryContent).toContain('<memory_frame')
+    expect(memoryContent).toContain('Fix tests')
   })
 
   test('handles empty message history', () => {
