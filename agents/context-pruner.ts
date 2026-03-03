@@ -564,6 +564,22 @@ const definition: AgentDefinition = {
 
     const messages = agentState.messageHistory
     const maxContextLength: number = params?.maxContextLength ?? 200_000
+    // contextTokenCount is messages + system prompt from token-count API.
+    // Add tool definition overhead to better match provider-side prompt limits.
+    const systemPromptTokens = agentState.systemPrompt
+      ? estimateTokens(agentState.systemPrompt)
+      : 0
+    const toolDefinitionTokens =
+      agentState.toolDefinitions &&
+      Object.keys(agentState.toolDefinitions).length > 0
+        ? estimateTokens(agentState.toolDefinitions)
+        : 0
+    const estimatedTotalContextTokens =
+      agentState.contextTokenCount + toolDefinitionTokens
+    const maxMessageTokens = Math.max(
+      1000,
+      maxContextLength - systemPromptTokens - toolDefinitionTokens,
+    )
 
     // STEP 0: Always remove the last INSTRUCTIONS_PROMPT and SUBAGENT_SPAWN
     // (these are inserted for the context-pruner subagent itself)
@@ -608,7 +624,11 @@ const definition: AgentDefinition = {
     // - Prune when context exceeds max, OR
     // - Prune when prompt cache will miss (>5 min gap) to take advantage of fresh context
     // If not, return messages with just the subagent-specific tags removed
-    if (agentState.contextTokenCount + TOKEN_COUNT_FUDGE_FACTOR <= maxContextLength && !cacheWillMiss) {
+    if (
+      estimatedTotalContextTokens + TOKEN_COUNT_FUDGE_FACTOR <=
+        maxContextLength &&
+      !cacheWillMiss
+    ) {
       yield {
         toolName: 'set_messages',
         input: { messages: currentMessages },
@@ -908,8 +928,8 @@ const definition: AgentDefinition = {
 
     let summaryText = summaryParts.join('\n\n---\n\n')
 
-    // Calculate target size (10% of max context, for messages only)
-    const targetTokens = maxContextLength * TARGET_SUMMARY_FACTOR
+    // Calculate target size (10% of available message budget)
+    const targetTokens = maxMessageTokens * TARGET_SUMMARY_FACTOR
     let summaryTokens = estimateTokens(summaryText)
 
     // If summary is too big, truncate from the beginning

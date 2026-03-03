@@ -278,7 +278,10 @@ ${PLACEHOLDER.GIT_CHANGES_PROMPT}
           toolName: 'spawn_agent_inline',
           input: {
             agent_type: 'context-pruner',
-            params: params ?? {},
+            params: {
+              maxContextLength: 150_000,
+              ...(params ?? {}),
+            },
           },
           includeToolCall: false,
         } as any

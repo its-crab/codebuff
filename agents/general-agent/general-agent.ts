@@ -9,6 +9,7 @@ export const createGeneralAgent = (options: {
 }): Omit<SecretAgentDefinition, 'id'> => {
   const { model } = options
   const isGpt5 = model === 'gpt-5'
+  const defaultMaxContextLength = isGpt5 ? 300_000 : 150_000
 
   return {
     publisher,
@@ -83,7 +84,10 @@ export const createGeneralAgent = (options: {
           toolName: 'spawn_agent_inline',
           input: {
             agent_type: 'context-pruner',
-            params: params ?? {},
+            params: {
+              maxContextLength: defaultMaxContextLength,
+              ...(params ?? {}),
+            },
           },
           includeToolCall: false,
         } as any

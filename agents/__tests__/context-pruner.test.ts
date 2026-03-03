@@ -1432,6 +1432,29 @@ describe('context-pruner threshold behavior', () => {
       '<conversation_summary>',
     )
   })
+
+  test('prunes when tool definition overhead pushes total over limit', () => {
+    const messages = [
+      createMessage('user', 'Hello'),
+      createMessage('assistant', 'Hi'),
+    ]
+
+    mockAgentState.toolDefinitions = {
+      huge_tool: {
+        description: 'x'.repeat(50_000),
+        inputSchema: {},
+      },
+    }
+
+    // Without tool definitions this is below the threshold:
+    // 148000 + 1000 <= 150000
+    const results = runHandleSteps(messages, 148000, 150000)
+
+    expect(results[0].input.messages).toHaveLength(1)
+    expect(results[0].input.messages[0].content[0].text).toContain(
+      '<conversation_summary>',
+    )
+  })
 })
 
 describe('context-pruner str_replace and write_file tool results', () => {
