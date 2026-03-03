@@ -16,6 +16,12 @@ import {
   RETRY_BACKOFF_BASE_DELAY_MS,
   RETRY_BACKOFF_MAX_DELAY_MS,
 } from '../retry-config'
+import {
+  fetchMemoryFrameLocal,
+  queryMemoryFactsLocal,
+  saveMemoryFrameLocal,
+  upsertMemoryFactsLocal,
+} from './local-memory'
 
 import type {
   AddAgentStepFn,
@@ -45,45 +51,6 @@ const userInfoCache: Record<
 const agentsResponseSchema = z.object({
   version: z.string(),
   data: DynamicAgentTemplateSchema,
-})
-
-const memoryFrameResponseSchema = z.object({
-  threadId: z.string(),
-  revision: z.number().int().nonnegative(),
-  frameHash: z.string().nullable(),
-  frameText: z.string(),
-  pinnedFactIds: z.array(z.string()),
-  unresolvedConflictIds: z.array(z.string()),
-})
-
-const memoryFactResponseSchema = z.object({
-  id: z.string(),
-  key: z.string(),
-  content: z.string(),
-  confidence: z.number().int().nonnegative(),
-  weight: z.number().int().nonnegative(),
-  tags: z.array(z.string()),
-  updatedAt: z.string(),
-})
-
-const memoryConflictResponseSchema = z.object({
-  id: z.string(),
-  key: z.string(),
-  leftContent: z.string(),
-  rightContent: z.string(),
-  leftConfidence: z.number().int().nonnegative(),
-  rightConfidence: z.number().int().nonnegative(),
-  leftWeight: z.number().int().nonnegative(),
-  rightWeight: z.number().int().nonnegative(),
-  importance: z.number(),
-})
-
-const memoryFactsEnvelopeSchema = z.object({
-  threadId: z.string(),
-  facts: z.array(memoryFactResponseSchema),
-  unresolvedConflictIds: z.array(z.string()),
-  autoResolvedConflictIds: z.array(z.string()).optional(),
-  highImpactConflicts: z.array(memoryConflictResponseSchema).optional(),
 })
 
 /**
@@ -509,44 +476,10 @@ export async function addAgentStep(
 export async function fetchMemoryFrame(
   params: ParamsOf<FetchMemoryFrameFn>,
 ): ReturnType<FetchMemoryFrameFn> {
-  const { apiKey, threadId, fingerprintId, logger } = params
-
-  const url = new URL(`/api/v1/memory`, WEBSITE_URL)
-
   try {
-    const response = await fetchWithRetry(
-      url,
-      {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${apiKey}`,
-        },
-        body: JSON.stringify({
-          action: 'HYDRATE',
-          threadId,
-          fingerprintId,
-        }),
-      },
-      logger,
-    )
-
-    if (!response.ok) {
-      logger.error({ status: response.status }, 'fetchMemoryFrame request failed')
-      return null
-    }
-
-    const responseBody = await response.json()
-    const parsed = memoryFrameResponseSchema.safeParse(responseBody)
-    if (!parsed.success) {
-      logger.error(
-        { responseBody, issues: parsed.error.issues },
-        'fetchMemoryFrame response schema validation failed',
-      )
-      return null
-    }
-
-    return parsed.data
+    return await fetchMemoryFrameLocal(params)
   } catch (error) {
+    const { logger, threadId, fingerprintId } = params
     logger.error(
       { error: getErrorObject(error), threadId, fingerprintId },
       'fetchMemoryFrame error',
@@ -558,59 +491,10 @@ export async function fetchMemoryFrame(
 export async function saveMemoryFrame(
   params: ParamsOf<SaveMemoryFrameFn>,
 ): ReturnType<SaveMemoryFrameFn> {
-  const {
-    apiKey,
-    threadId,
-    fingerprintId,
-    revision,
-    frameHash,
-    frameText,
-    pinnedFactIds,
-    unresolvedConflictIds,
-    logger,
-  } = params
-
-  const url = new URL(`/api/v1/memory`, WEBSITE_URL)
-
   try {
-    const response = await fetchWithRetry(
-      url,
-      {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${apiKey}`,
-        },
-        body: JSON.stringify({
-          action: 'UPSERT_FRAME',
-          threadId,
-          fingerprintId,
-          revision,
-          frameHash,
-          frameText,
-          pinnedFactIds,
-          unresolvedConflictIds,
-        }),
-      },
-      logger,
-    )
-
-    if (!response.ok) {
-      logger.error({ status: response.status }, 'saveMemoryFrame request failed')
-      return null
-    }
-
-    const responseBody = await response.json()
-    const parsed = memoryFrameResponseSchema.safeParse(responseBody)
-    if (!parsed.success) {
-      logger.error(
-        { responseBody, issues: parsed.error.issues },
-        'saveMemoryFrame response schema validation failed',
-      )
-      return null
-    }
-
-    return parsed.data
+    return await saveMemoryFrameLocal(params)
   } catch (error) {
+    const { logger, threadId, fingerprintId, revision } = params
     logger.error(
       { error: getErrorObject(error), threadId, fingerprintId, revision },
       'saveMemoryFrame error',
@@ -622,51 +506,10 @@ export async function saveMemoryFrame(
 export async function upsertMemoryFacts(
   params: ParamsOf<UpsertMemoryFactsFn>,
 ): ReturnType<UpsertMemoryFactsFn> {
-  const { apiKey, threadId, fingerprintId, facts, logger } = params
-
-  const url = new URL(`/api/v1/memory`, WEBSITE_URL)
-
   try {
-    const response = await fetchWithRetry(
-      url,
-      {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${apiKey}`,
-        },
-        body: JSON.stringify({
-          action: 'UPSERT_FACTS',
-          threadId,
-          fingerprintId,
-          facts,
-        }),
-      },
-      logger,
-    )
-
-    if (!response.ok) {
-      logger.error({ status: response.status }, 'upsertMemoryFacts request failed')
-      return null
-    }
-
-    const responseBody = await response.json()
-    const parsed = memoryFactsEnvelopeSchema.safeParse(responseBody)
-    if (!parsed.success) {
-      logger.error(
-        { responseBody, issues: parsed.error.issues },
-        'upsertMemoryFacts response schema validation failed',
-      )
-      return null
-    }
-
-    return {
-      threadId: parsed.data.threadId,
-      facts: parsed.data.facts,
-      unresolvedConflictIds: parsed.data.unresolvedConflictIds,
-      autoResolvedConflictIds: parsed.data.autoResolvedConflictIds ?? [],
-      highImpactConflicts: parsed.data.highImpactConflicts ?? [],
-    }
+    return await upsertMemoryFactsLocal(params)
   } catch (error) {
+    const { logger, threadId, fingerprintId } = params
     logger.error(
       { error: getErrorObject(error), threadId, fingerprintId },
       'upsertMemoryFacts error',
@@ -678,51 +521,10 @@ export async function upsertMemoryFacts(
 export async function queryMemoryFacts(
   params: ParamsOf<QueryMemoryFactsFn>,
 ): ReturnType<QueryMemoryFactsFn> {
-  const { apiKey, threadId, fingerprintId, query, limit, logger } = params
-
-  const url = new URL(`/api/v1/memory`, WEBSITE_URL)
-
   try {
-    const response = await fetchWithRetry(
-      url,
-      {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${apiKey}`,
-        },
-        body: JSON.stringify({
-          action: 'QUERY_FACTS',
-          threadId,
-          fingerprintId,
-          query,
-          limit,
-        }),
-      },
-      logger,
-    )
-
-    if (!response.ok) {
-      logger.error({ status: response.status }, 'queryMemoryFacts request failed')
-      return null
-    }
-
-    const responseBody = await response.json()
-    const parsed = memoryFactsEnvelopeSchema.safeParse(responseBody)
-    if (!parsed.success) {
-      logger.error(
-        { responseBody, issues: parsed.error.issues },
-        'queryMemoryFacts response schema validation failed',
-      )
-      return null
-    }
-
-    return {
-      threadId: parsed.data.threadId,
-      facts: parsed.data.facts,
-      unresolvedConflictIds: parsed.data.unresolvedConflictIds,
-      highImpactConflicts: parsed.data.highImpactConflicts ?? [],
-    }
+    return await queryMemoryFactsLocal(params)
   } catch (error) {
+    const { logger, threadId, fingerprintId, query } = params
     logger.error(
       { error: getErrorObject(error), threadId, fingerprintId, query },
       'queryMemoryFacts error',
