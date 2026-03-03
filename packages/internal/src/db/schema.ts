@@ -52,6 +52,18 @@ export const agentStepStatus = pgEnum('agent_step_status', [
   'skipped',
 ])
 
+export const memoryEventType = pgEnum('memory_event_type', [
+  'hydrate',
+  'upsert_frame',
+  'upsert_facts',
+  'query_facts',
+])
+
+export const memoryConflictStatus = pgEnum('memory_conflict_status', [
+  'unresolved',
+  'resolved',
+])
+
 export const subscriptionStatusEnum = pgEnum('subscription_status', [
   'incomplete',
   'incomplete_expired',
@@ -792,5 +804,191 @@ export const agentStep = pgTable(
     // Performance indices
     index('idx_agent_step_run_id').on(table.agent_run_id),
     index('idx_agent_step_children_gin').using('gin', table.child_run_ids),
+  ],
+)
+
+export const memoryThread = pgTable(
+  'memory_thread',
+  {
+    id: text('id')
+      .primaryKey()
+      .$defaultFn(() => crypto.randomUUID()),
+    user_id: text('user_id')
+      .notNull()
+      .references(() => user.id, { onDelete: 'cascade' }),
+    fingerprint_id: text('fingerprint_id').notNull(),
+    latest_revision: integer('latest_revision').notNull().default(0),
+    frame_hash: text('frame_hash'),
+    frame_text: text('frame_text').notNull().default(''),
+    pinned_fact_ids: text('pinned_fact_ids')
+      .array()
+      .notNull()
+      .default(sql`'{}'::text[]`),
+    unresolved_conflict_ids: text('unresolved_conflict_ids')
+      .array()
+      .notNull()
+      .default(sql`'{}'::text[]`),
+    created_at: timestamp('created_at', { mode: 'date', withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updated_at: timestamp('updated_at', { mode: 'date', withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    index('idx_memory_thread_user').on(table.user_id, table.updated_at),
+    index('idx_memory_thread_fingerprint').on(
+      table.user_id,
+      table.fingerprint_id,
+      table.updated_at,
+    ),
+  ],
+)
+
+export const memoryEvent = pgTable(
+  'memory_event',
+  {
+    id: text('id')
+      .primaryKey()
+      .$defaultFn(() => crypto.randomUUID()),
+    thread_id: text('thread_id')
+      .notNull()
+      .references(() => memoryThread.id, { onDelete: 'cascade' }),
+    user_id: text('user_id')
+      .notNull()
+      .references(() => user.id, { onDelete: 'cascade' }),
+    event_type: memoryEventType('event_type').notNull(),
+    payload: jsonb('payload').notNull(),
+    created_at: timestamp('created_at', { mode: 'date', withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    index('idx_memory_event_thread').on(table.thread_id, table.created_at),
+    index('idx_memory_event_user').on(table.user_id, table.created_at),
+  ],
+)
+
+export const memoryFact = pgTable(
+  'memory_fact',
+  {
+    id: text('id')
+      .primaryKey()
+      .$defaultFn(() => crypto.randomUUID()),
+    thread_id: text('thread_id')
+      .notNull()
+      .references(() => memoryThread.id, { onDelete: 'cascade' }),
+    user_id: text('user_id')
+      .notNull()
+      .references(() => user.id, { onDelete: 'cascade' }),
+    fact_key: text('fact_key').notNull(),
+    fact_hash: text('fact_hash').notNull(),
+    content: text('content').notNull(),
+    confidence: integer('confidence').notNull().default(50),
+    weight: integer('weight').notNull().default(50),
+    tags: text('tags').array().notNull().default(sql`'{}'::text[]`),
+    source_event_id: text('source_event_id').references(() => memoryEvent.id, {
+      onDelete: 'set null',
+    }),
+    active: boolean('active').notNull().default(true),
+    last_seen_at: timestamp('last_seen_at', { mode: 'date', withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    created_at: timestamp('created_at', { mode: 'date', withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updated_at: timestamp('updated_at', { mode: 'date', withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    uniqueIndex('unique_memory_fact_hash_per_thread').on(
+      table.thread_id,
+      table.fact_hash,
+    ),
+    index('idx_memory_fact_thread_key').on(
+      table.thread_id,
+      table.fact_key,
+      table.updated_at,
+    ),
+    index('idx_memory_fact_thread_active').on(
+      table.thread_id,
+      table.active,
+      table.updated_at,
+    ),
+  ],
+)
+
+export const memoryConflict = pgTable(
+  'memory_conflict',
+  {
+    id: text('id')
+      .primaryKey()
+      .$defaultFn(() => crypto.randomUUID()),
+    thread_id: text('thread_id')
+      .notNull()
+      .references(() => memoryThread.id, { onDelete: 'cascade' }),
+    user_id: text('user_id')
+      .notNull()
+      .references(() => user.id, { onDelete: 'cascade' }),
+    left_fact_id: text('left_fact_id')
+      .notNull()
+      .references(() => memoryFact.id, { onDelete: 'cascade' }),
+    right_fact_id: text('right_fact_id')
+      .notNull()
+      .references(() => memoryFact.id, { onDelete: 'cascade' }),
+    status: memoryConflictStatus('status').notNull().default('unresolved'),
+    reason: text('reason'),
+    created_at: timestamp('created_at', { mode: 'date', withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    resolved_at: timestamp('resolved_at', { mode: 'date', withTimezone: true }),
+  },
+  (table) => [
+    uniqueIndex('unique_memory_conflict_pair').on(
+      table.thread_id,
+      table.left_fact_id,
+      table.right_fact_id,
+    ),
+    index('idx_memory_conflict_thread_status').on(
+      table.thread_id,
+      table.status,
+      table.created_at,
+    ),
+  ],
+)
+
+export const memoryFactEdge = pgTable(
+  'memory_fact_edge',
+  {
+    id: text('id')
+      .primaryKey()
+      .$defaultFn(() => crypto.randomUUID()),
+    thread_id: text('thread_id')
+      .notNull()
+      .references(() => memoryThread.id, { onDelete: 'cascade' }),
+    user_id: text('user_id')
+      .notNull()
+      .references(() => user.id, { onDelete: 'cascade' }),
+    from_fact_id: text('from_fact_id')
+      .notNull()
+      .references(() => memoryFact.id, { onDelete: 'cascade' }),
+    to_fact_id: text('to_fact_id')
+      .notNull()
+      .references(() => memoryFact.id, { onDelete: 'cascade' }),
+    relation: text('relation').notNull(),
+    weight: integer('weight').notNull().default(50),
+    created_at: timestamp('created_at', { mode: 'date', withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    uniqueIndex('unique_memory_fact_edge').on(
+      table.thread_id,
+      table.from_fact_id,
+      table.to_fact_id,
+      table.relation,
+    ),
+    index('idx_memory_fact_edge_thread').on(table.thread_id, table.created_at),
   ],
 )

@@ -8,6 +8,10 @@ import { APICallError, type ToolSet } from 'ai'
 import { cloneDeep, mapValues } from 'lodash'
 
 import { callTokenCountAPI } from './llm-api/codebuff-web-api'
+import {
+  extractFactCandidatesFromFrameBody,
+  hydrateMemoryFrameForStep,
+} from './memory/auto-memory'
 import { getMCPToolData } from './mcp'
 import { getAgentStreamFromTemplate } from './prompt-agent-stream'
 import { runProgrammaticStep } from './run-programmatic-step'
@@ -30,8 +34,13 @@ import type { AgentTemplate } from '@codebuff/common/types/agent-template'
 import type { TrackEventFn } from '@codebuff/common/types/contracts/analytics'
 import type {
   AddAgentStepFn,
+  FetchMemoryFrameFn,
   FinishAgentRunFn,
+  MemoryConflictRecord,
+  QueryMemoryFactsFn,
+  SaveMemoryFrameFn,
   StartAgentRunFn,
+  UpsertMemoryFactsFn,
 } from '@codebuff/common/types/contracts/database'
 import type { PromptAiSdkFn } from '@codebuff/common/types/contracts/llm'
 import type { Logger } from '@codebuff/common/types/contracts/logger'
@@ -81,6 +90,77 @@ async function additionalToolDefinitions(
     mcpServers: agentTemplate!.mcpServers,
     writeTo: defs,
   })
+}
+
+function stripEphemeralMemorySections(value: string): string {
+  return value
+    .replace(
+      /\n?\[RETRIEVED FACTS\][\s\S]*?(?=\n\[[A-Z][A-Z\- ]+\]|$)/g,
+      '',
+    )
+    .replace(
+      /\n?\[HIGH-IMPACT CONFLICTS\][\s\S]*?(?=\n\[[A-Z][A-Z\- ]+\]|$)/g,
+      '',
+    )
+    .replace(
+      /\n?\[CONFLICT RESOLUTION LOG\][\s\S]*?(?=\n\[[A-Z][A-Z\- ]+\]|$)/g,
+      '',
+    )
+    .trim()
+}
+
+function truncateMemoryLine(value: string, maxChars: number = 220): string {
+  if (value.length <= maxChars) {
+    return value
+  }
+  return `${value.slice(0, maxChars - 3)}...`
+}
+
+function formatHighImpactConflictLines(
+  conflicts: MemoryConflictRecord[],
+): string[] {
+  return conflicts
+    .slice(0, 6)
+    .map((conflict) =>
+      truncateMemoryLine(
+        `${conflict.key}: "${conflict.leftContent}" vs "${conflict.rightContent}" (importance ${Math.round(conflict.importance)})`,
+      ),
+    )
+}
+
+function mergeEphemeralMemorySections(params: {
+  existingMemoryText: string
+  retrievedFacts?: string[]
+  highImpactConflicts?: MemoryConflictRecord[]
+  autoResolvedCount?: number
+}): string {
+  const {
+    existingMemoryText,
+    retrievedFacts = [],
+    highImpactConflicts = [],
+    autoResolvedCount = 0,
+  } = params
+
+  const base = stripEphemeralMemorySections(existingMemoryText)
+  const sections: string[] = []
+
+  if (retrievedFacts.length > 0) {
+    sections.push('[RETRIEVED FACTS]')
+    sections.push(...retrievedFacts.map((fact) => `- ${truncateMemoryLine(fact)}`))
+  }
+
+  const conflictLines = formatHighImpactConflictLines(highImpactConflicts)
+  if (conflictLines.length > 0) {
+    sections.push('[HIGH-IMPACT CONFLICTS]')
+    sections.push(...conflictLines.map((line) => `- ${line}`))
+  }
+
+  if (autoResolvedCount > 0) {
+    sections.push('[CONFLICT RESOLUTION LOG]')
+    sections.push(`- Auto-resolved ${autoResolvedCount} low-confidence contradictions`)
+  }
+
+  return [base, ...sections].filter((value) => value.trim().length > 0).join('\n')
 }
 
 export const runAgentStep = async (
@@ -467,12 +547,17 @@ export async function loopAgentSteps(
     content?: Array<TextPart | ImagePart>
     costMode?: string
     fileContext: ProjectFileContext
+    fingerprintId: string
     finishAgentRun: FinishAgentRunFn
     localAgentTemplates: Record<string, AgentTemplate>
     logger: Logger
     parentSystemPrompt?: string
     parentTools?: ToolSet
     prompt: string | undefined
+    fetchMemoryFrame?: FetchMemoryFrameFn
+    queryMemoryFacts?: QueryMemoryFactsFn
+    saveMemoryFrame?: SaveMemoryFrameFn
+    upsertMemoryFacts?: UpsertMemoryFactsFn
     signal: AbortSignal
     spawnParams: Record<string, any> | undefined
     startAgentRun: StartAgentRunFn
@@ -543,12 +628,17 @@ export async function loopAgentSteps(
     clientSessionId,
     content,
     fileContext,
+    fingerprintId,
     finishAgentRun,
     localAgentTemplates,
     logger,
     parentSystemPrompt,
     parentTools,
     prompt,
+    fetchMemoryFrame,
+    queryMemoryFacts,
+    saveMemoryFrame,
+    upsertMemoryFacts,
     signal,
     spawnParams,
     startAgentRun,
@@ -692,7 +782,6 @@ export async function loopAgentSteps(
           ],
         ),
       ),
-      ,
     ],
 
     instructionsPrompt &&
@@ -739,6 +828,190 @@ export async function loopAgentSteps(
       totalSteps++
       if (signal.aborted) {
         throw new AbortError()
+      }
+
+      const shouldSyncPersistedMemory = !currentAgentState.parentId
+      const shouldRefreshPersistedMemory =
+        !currentAgentState.memory?.lastHydratedAt ||
+        Date.now() - currentAgentState.memory.lastHydratedAt > 30_000
+
+      if (
+        shouldSyncPersistedMemory &&
+        fetchMemoryFrame &&
+        shouldRefreshPersistedMemory
+      ) {
+        try {
+          const remoteMemory = await fetchMemoryFrame({
+            ...params,
+            userId,
+            threadId: currentAgentState.memory?.threadId,
+            fingerprintId,
+            logger,
+          })
+
+          if (remoteMemory) {
+            currentAgentState = {
+              ...currentAgentState,
+              memory: {
+                threadId: remoteMemory.threadId,
+                revision: remoteMemory.revision,
+                frameHash:
+                  remoteMemory.frameHash ?? currentAgentState.memory?.frameHash,
+                persistedFrameText:
+                  remoteMemory.frameText ||
+                  currentAgentState.memory?.persistedFrameText,
+                pinnedFactIds: remoteMemory.pinnedFactIds,
+                unresolvedConflictIds: remoteMemory.unresolvedConflictIds,
+                lastHydratedAt: Date.now(),
+              },
+            }
+          }
+
+          if (queryMemoryFacts && currentPrompt?.trim()) {
+            const queriedFacts = await queryMemoryFacts({
+              ...params,
+              userId,
+              threadId:
+                remoteMemory?.threadId ?? currentAgentState.memory?.threadId,
+              fingerprintId,
+              query: currentPrompt,
+              limit: 10,
+              logger,
+            })
+
+            if (queriedFacts) {
+              const mergedMemoryText = mergeEphemeralMemorySections({
+                existingMemoryText:
+                  currentAgentState.memory?.persistedFrameText ?? '',
+                retrievedFacts: queriedFacts.facts.map((fact) => fact.content),
+                highImpactConflicts: queriedFacts.highImpactConflicts,
+              })
+              currentAgentState = {
+                ...currentAgentState,
+                memory: {
+                  threadId: queriedFacts.threadId,
+                  revision: currentAgentState.memory?.revision ?? 0,
+                  frameHash: currentAgentState.memory?.frameHash,
+                  persistedFrameText: mergedMemoryText,
+                  pinnedFactIds: currentAgentState.memory?.pinnedFactIds ?? [],
+                  unresolvedConflictIds: queriedFacts.unresolvedConflictIds,
+                  lastHydratedAt: Date.now(),
+                },
+              }
+            }
+          }
+        } catch (error) {
+          logger.warn(
+            { error: getErrorObject(error), runId, agentType },
+            'Failed to fetch persisted memory frame',
+          )
+        }
+      }
+
+      const memoryFrameMaxTokens =
+        typeof currentParams?.maxContextLength === 'number'
+          ? Math.max(900, Math.floor(currentParams.maxContextLength * 0.012))
+          : 1500
+
+      currentAgentState = hydrateMemoryFrameForStep({
+        agentState: currentAgentState,
+        prompt: currentPrompt,
+        maxTokens: memoryFrameMaxTokens,
+        persistedFrameText: currentAgentState.memory?.persistedFrameText,
+      })
+
+      if (
+        shouldSyncPersistedMemory &&
+        saveMemoryFrame &&
+        currentAgentState.memory?.frameHash &&
+        currentAgentState.memory?.persistedFrameText
+      ) {
+        try {
+          const savedMemory = await saveMemoryFrame({
+            ...params,
+            userId,
+            threadId: currentAgentState.memory.threadId,
+            fingerprintId,
+            revision: currentAgentState.memory.revision,
+            frameHash: currentAgentState.memory.frameHash,
+            frameText: currentAgentState.memory.persistedFrameText,
+            pinnedFactIds: currentAgentState.memory.pinnedFactIds,
+            unresolvedConflictIds:
+              currentAgentState.memory.unresolvedConflictIds,
+            logger,
+          })
+
+          if (savedMemory) {
+            currentAgentState = {
+              ...currentAgentState,
+              memory: {
+                ...currentAgentState.memory,
+                threadId: savedMemory.threadId,
+                revision: savedMemory.revision,
+                frameHash:
+                  savedMemory.frameHash ??
+                  currentAgentState.memory.frameHash,
+                persistedFrameText:
+                  savedMemory.frameText ||
+                  currentAgentState.memory.persistedFrameText,
+                pinnedFactIds: savedMemory.pinnedFactIds,
+                unresolvedConflictIds: savedMemory.unresolvedConflictIds,
+                lastHydratedAt: Date.now(),
+              },
+            }
+          }
+        } catch (error) {
+          logger.warn(
+            { error: getErrorObject(error), runId, agentType },
+            'Failed to save persisted memory frame',
+          )
+        }
+      }
+
+      if (
+        shouldSyncPersistedMemory &&
+        upsertMemoryFacts &&
+        currentAgentState.memory?.persistedFrameText
+      ) {
+        try {
+          const factCandidates = extractFactCandidatesFromFrameBody(
+            currentAgentState.memory.persistedFrameText,
+          )
+
+          if (factCandidates.length > 0) {
+            const factResult = await upsertMemoryFacts({
+              ...params,
+              userId,
+              threadId: currentAgentState.memory.threadId,
+              fingerprintId,
+              facts: factCandidates,
+              logger,
+            })
+
+            if (factResult) {
+              const mergedMemoryText = mergeEphemeralMemorySections({
+                existingMemoryText:
+                  currentAgentState.memory?.persistedFrameText ?? '',
+                highImpactConflicts: factResult.highImpactConflicts,
+                autoResolvedCount: factResult.autoResolvedConflictIds.length,
+              })
+
+              currentAgentState = {
+                ...currentAgentState,
+                memory: {
+                  ...currentAgentState.memory,
+                  persistedFrameText: mergedMemoryText,
+                  unresolvedConflictIds: factResult.unresolvedConflictIds,
+                },
+              }
+            }
+          }
+        } catch (error) {
+          logger.warn(
+            { error: getErrorObject(error), runId, agentType },
+            'Failed to upsert memory facts',
+          )
+        }
       }
 
       const startTime = new Date()

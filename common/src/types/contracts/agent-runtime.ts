@@ -12,10 +12,14 @@ import type {
 import type {
   AddAgentStepFn,
   DatabaseAgentCache,
+  FetchMemoryFrameFn,
   FetchAgentFromDatabaseFn,
   FinishAgentRunFn,
   GetUserInfoFromApiKeyFn,
+  QueryMemoryFactsFn,
+  SaveMemoryFrameFn,
   StartAgentRunFn,
+  UpsertMemoryFactsFn,
 } from './database'
 import type { ClientEnv, CiEnv } from './env'
 import type {
@@ -37,6 +41,10 @@ export type AgentRuntimeDeps = {
   startAgentRun: StartAgentRunFn
   finishAgentRun: FinishAgentRunFn
   addAgentStep: AddAgentStepFn
+  fetchMemoryFrame?: FetchMemoryFrameFn
+  saveMemoryFrame?: SaveMemoryFrameFn
+  upsertMemoryFacts?: UpsertMemoryFactsFn
+  queryMemoryFacts?: QueryMemoryFactsFn
 
   // Billing
   consumeCreditsWithFallback: ConsumeCreditsWithFallbackFn

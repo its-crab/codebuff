@@ -5,10 +5,14 @@ import { success } from '@codebuff/common/util/error'
 
 import {
   addAgentStep,
+  fetchMemoryFrame,
   fetchAgentFromDatabase,
   finishAgentRun,
   getUserInfoFromApiKey,
+  queryMemoryFacts,
+  saveMemoryFrame,
   startAgentRun,
+  upsertMemoryFacts,
 } from './database'
 import { promptAiSdk, promptAiSdkStream, promptAiSdkStructured } from './llm'
 
@@ -62,6 +66,10 @@ export function getAgentRuntimeImpl(
     startAgentRun,
     finishAgentRun,
     addAgentStep,
+    fetchMemoryFrame,
+    saveMemoryFrame,
+    upsertMemoryFacts,
+    queryMemoryFacts,
 
     // Billing
     consumeCreditsWithFallback: async () =>

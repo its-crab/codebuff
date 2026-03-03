@@ -124,6 +124,35 @@ export const TEST_AGENT_RUNTIME_IMPL = Object.freeze({
   startAgentRun: async () => 'test-agent-run-id',
   finishAgentRun: async () => {},
   addAgentStep: async () => 'test-agent-step-id',
+  fetchMemoryFrame: async () => ({
+    threadId: 'test-thread-id',
+    revision: 0,
+    frameHash: null,
+    frameText: '',
+    pinnedFactIds: [],
+    unresolvedConflictIds: [],
+  }),
+  saveMemoryFrame: async () => ({
+    threadId: 'test-thread-id',
+    revision: 0,
+    frameHash: null,
+    frameText: '',
+    pinnedFactIds: [],
+    unresolvedConflictIds: [],
+  }),
+  upsertMemoryFacts: async () => ({
+    threadId: 'test-thread-id',
+    facts: [],
+    unresolvedConflictIds: [],
+    autoResolvedConflictIds: [],
+    highImpactConflicts: [],
+  }),
+  queryMemoryFacts: async () => ({
+    threadId: 'test-thread-id',
+    facts: [],
+    unresolvedConflictIds: [],
+    highImpactConflicts: [],
+  }),
   consumeCreditsWithFallback: async () => {
     throw new Error(
       'consumeCreditsWithFallback not implemented in test runtime',
@@ -192,6 +221,10 @@ export interface TestAgentRuntimeParams {
   startAgentRun: ReturnType<typeof mock>
   finishAgentRun: ReturnType<typeof mock>
   addAgentStep: ReturnType<typeof mock>
+  fetchMemoryFrame: ReturnType<typeof mock>
+  saveMemoryFrame: ReturnType<typeof mock>
+  upsertMemoryFacts: ReturnType<typeof mock>
+  queryMemoryFacts: ReturnType<typeof mock>
   logger: typeof testLogger
   trackEvent: ReturnType<typeof mock>
   clientEnv: typeof testClientEnv
@@ -259,6 +292,43 @@ export function createTestAgentRuntimeParams(
     startAgentRun: overrides.startAgentRun ?? mock(async () => 'test-run-id'),
     finishAgentRun: overrides.finishAgentRun ?? mock(async () => {}),
     addAgentStep: overrides.addAgentStep ?? mock(async () => 'test-step-id'),
+    fetchMemoryFrame:
+      overrides.fetchMemoryFrame ??
+      mock(async () => ({
+        threadId: 'test-thread-id',
+        revision: 0,
+        frameHash: null,
+        frameText: '',
+        pinnedFactIds: [],
+        unresolvedConflictIds: [],
+      })),
+    saveMemoryFrame:
+      overrides.saveMemoryFrame ??
+      mock(async () => ({
+        threadId: 'test-thread-id',
+        revision: 0,
+        frameHash: null,
+        frameText: '',
+        pinnedFactIds: [],
+        unresolvedConflictIds: [],
+      })),
+    upsertMemoryFacts:
+      overrides.upsertMemoryFacts ??
+      mock(async () => ({
+        threadId: 'test-thread-id',
+        facts: [],
+        unresolvedConflictIds: [],
+        autoResolvedConflictIds: [],
+        highImpactConflicts: [],
+      })),
+    queryMemoryFacts:
+      overrides.queryMemoryFacts ??
+      mock(async () => ({
+        threadId: 'test-thread-id',
+        facts: [],
+        unresolvedConflictIds: [],
+        highImpactConflicts: [],
+      })),
     logger: overrides.logger ?? testLogger,
     trackEvent: overrides.trackEvent ?? mock(() => {}),
     clientEnv: overrides.clientEnv ?? testClientEnv,
@@ -313,6 +383,35 @@ export function createTestAgentRuntimeDeps(): Omit<
     startAgentRun: mock(async () => 'test-run-id'),
     finishAgentRun: mock(async () => {}),
     addAgentStep: mock(async () => 'test-step-id'),
+    fetchMemoryFrame: mock(async () => ({
+      threadId: 'test-thread-id',
+      revision: 0,
+      frameHash: null,
+      frameText: '',
+      pinnedFactIds: [],
+      unresolvedConflictIds: [],
+    })),
+    saveMemoryFrame: mock(async () => ({
+      threadId: 'test-thread-id',
+      revision: 0,
+      frameHash: null,
+      frameText: '',
+      pinnedFactIds: [],
+      unresolvedConflictIds: [],
+    })),
+    upsertMemoryFacts: mock(async () => ({
+      threadId: 'test-thread-id',
+      facts: [],
+      unresolvedConflictIds: [],
+      autoResolvedConflictIds: [],
+      highImpactConflicts: [],
+    })),
+    queryMemoryFacts: mock(async () => ({
+      threadId: 'test-thread-id',
+      facts: [],
+      unresolvedConflictIds: [],
+      highImpactConflicts: [],
+    })),
     logger: testLogger,
     trackEvent: mock(() => {}),
     clientEnv: testClientEnv,

@@ -22,6 +22,16 @@ export const subgoalSchema = z.object({
 })
 export type Subgoal = z.infer<typeof subgoalSchema>
 
+export type MemoryState = {
+  threadId: string
+  revision: number
+  lastHydratedAt?: number
+  frameHash?: string
+  persistedFrameText?: string
+  pinnedFactIds: string[]
+  unresolvedConflictIds: string[]
+}
+
 export type AgentState = {
   /**
    * @deprecated agentId is replaced by runId
@@ -49,6 +59,11 @@ export type AgentState = {
    * This is updated on every agent step via the /api/v1/token-count endpoint.
    */
   contextTokenCount: number
+  /**
+   * Auto-maintained memory state used to generate always-on memory frame context.
+   * This persists in session state across turns.
+   */
+  memory?: MemoryState
 }
 
 export const AgentOutputSchema = z.discriminatedUnion('type', [

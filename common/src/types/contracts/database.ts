@@ -100,4 +100,98 @@ export type AddAgentStepFn = (params: {
   logger: Logger
 }) => Promise<string | null>
 
+export type MemoryFrameRecord = {
+  threadId: string
+  revision: number
+  frameHash: string | null
+  frameText: string
+  pinnedFactIds: string[]
+  unresolvedConflictIds: string[]
+}
+
+export type MemoryFactRecord = {
+  id: string
+  key: string
+  content: string
+  confidence: number
+  weight: number
+  tags: string[]
+  updatedAt: string
+}
+
+export type MemoryConflictRecord = {
+  id: string
+  key: string
+  leftContent: string
+  rightContent: string
+  leftConfidence: number
+  rightConfidence: number
+  leftWeight: number
+  rightWeight: number
+  importance: number
+}
+
+export type FetchMemoryFrameFn = (params: {
+  apiKey: string
+  userId?: string
+  threadId?: string
+  fingerprintId: string
+  logger: Logger
+}) => Promise<MemoryFrameRecord | null>
+
+export type SaveMemoryFrameFn = (params: {
+  apiKey: string
+  userId?: string
+  threadId?: string
+  fingerprintId: string
+  revision: number
+  frameHash: string
+  frameText: string
+  pinnedFactIds?: string[]
+  unresolvedConflictIds?: string[]
+  logger: Logger
+}) => Promise<MemoryFrameRecord | null>
+
+export type UpsertMemoryFactsFn = (params: {
+  apiKey: string
+  userId?: string
+  threadId?: string
+  fingerprintId: string
+  facts: Array<{
+    key?: string
+    content: string
+    confidence?: number
+    weight?: number
+    tags?: string[]
+  }>
+  logger: Logger
+}) => Promise<
+  | {
+      threadId: string
+      facts: MemoryFactRecord[]
+      unresolvedConflictIds: string[]
+      autoResolvedConflictIds: string[]
+      highImpactConflicts: MemoryConflictRecord[]
+    }
+  | null
+>
+
+export type QueryMemoryFactsFn = (params: {
+  apiKey: string
+  userId?: string
+  threadId?: string
+  fingerprintId: string
+  query?: string
+  limit?: number
+  logger: Logger
+}) => Promise<
+  | {
+      threadId: string
+      facts: MemoryFactRecord[]
+      unresolvedConflictIds: string[]
+      highImpactConflicts: MemoryConflictRecord[]
+    }
+  | null
+>
+
 export type DatabaseAgentCache = Map<string, AgentTemplate | null>
