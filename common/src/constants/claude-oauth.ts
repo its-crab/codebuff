@@ -10,7 +10,7 @@
  * - SDK: Direct Anthropic API routing via OAuth token
  * - Init: Background credential refresh on startup
  */
-export const CLAUDE_OAUTH_ENABLED = false
+export const CLAUDE_OAUTH_ENABLED = true
 
 // OAuth client ID used by Claude Code and third-party apps like opencode
 export const CLAUDE_OAUTH_CLIENT_ID = '9d1c250a-e61b-44d9-88ed-5944d1962f5e'
